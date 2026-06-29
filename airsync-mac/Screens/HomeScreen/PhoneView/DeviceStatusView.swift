@@ -10,6 +10,7 @@ import AppKit
 
 struct DeviceStatusView: View {
     @ObservedObject var appState = AppState.shared
+    @ObservedObject var bleManager = BLECentralManager.shared
     @State private var showingVolumePopover = false
     @State private var tempVolume: Double = 100
     @State private var isDragging = false
@@ -34,7 +35,17 @@ struct DeviceStatusView: View {
 
 
                 HStack{
-                    if appState.showMenubarNetworkStatus, let network = appState.cellularNetwork {
+                    if appState.showFloatingDeviceName {
+                        let deviceName = appState.device?.name ?? (bleManager.isAuthenticated ? bleManager.connectedDeviceName : nil) ?? ""
+                        if !deviceName.isEmpty {
+                            Text(deviceName)
+                                .font(.caption2.weight(.semibold))
+                                .lineLimit(1)
+                                .padding(.trailing, 2)
+                        }
+                    }
+
+                    if appState.showFloatingNetworkStatus, let network = appState.cellularNetwork {
                         if network == "NO_SIGNAL" {
                             Image(systemName: "antenna.radiowaves.left.and.right.slash")
                                 .font(.caption2.weight(.semibold))
@@ -49,14 +60,15 @@ struct DeviceStatusView: View {
                                 .foregroundColor(network.contains("5G") ? .green : (network == "LTE" ? .orange : .primary))
                         }
                     }
-                    
-                    if appState.menubarBatteryStyle != "none" {
-                        if appState.menubarBatteryStyle == "icon" || appState.menubarBatteryStyle == "both" {
+
+                    if appState.floatingBatteryStyle != "none" {
+                        let batteryStyle = appState.floatingBatteryStyle
+                        if batteryStyle == "icon" || batteryStyle == "both" {
                             Image(systemName: batteryIcon(for: batteryLevel, isCharging: batteryIsCharging))
                                 .help("\(batteryLevel)%")
                                 .contentTransition(.symbolEffect)
                         }
-                        if appState.menubarBatteryStyle == "percentage" || appState.menubarBatteryStyle == "both" {
+                        if batteryStyle == "percentage" || batteryStyle == "both" {
                             Text("\(batteryLevel)%")
                                 .font(.caption2)
                         }

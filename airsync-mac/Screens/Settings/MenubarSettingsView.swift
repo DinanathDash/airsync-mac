@@ -144,6 +144,37 @@ struct MenubarSettingsView: View {
                 .padding()
                 .glassBoxIfAvailable(radius: 18)
 
+                // Floating Window Settings
+                VStack(spacing: 12) {
+                    HStack {
+                        Label(L("settings.menubar.showDeviceName") + " (Floating)", systemImage: "iphone.gen3")
+                        Spacer()
+                        Toggle("", isOn: $appState.showFloatingDeviceName)
+                            .toggleStyle(.switch)
+                    }
+
+                    HStack {
+                        Label(L("settings.menubar.showNetworkStatus") + " (Floating)", systemImage: "antenna.radiowaves.left.and.right")
+                        Spacer()
+                        Toggle("", isOn: $appState.showFloatingNetworkStatus)
+                            .toggleStyle(.switch)
+                    }
+                    
+                    HStack {
+                        Label(L("settings.menubar.batteryStyle") + " (Floating)", systemImage: "battery.100")
+                        Spacer()
+                        Picker("", selection: $appState.floatingBatteryStyle) {
+                            Text(L("settings.menubar.batteryStyle.both")).tag("both")
+                            Text(L("settings.menubar.batteryStyle.icon")).tag("icon")
+                            Text(L("settings.menubar.batteryStyle.percentage")).tag("percentage")
+                            Text(L("settings.menubar.notifications.none")).tag("none")
+                        }
+                        .pickerStyle(MenuPickerStyle())
+                    }
+                }
+                .padding()
+                .glassBoxIfAvailable(radius: 18)
+
                 VStack(spacing: 12) {
 
                     HStack {
