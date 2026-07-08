@@ -1,3 +1,4 @@
+
 //
 //  AppState.swift
 //  airsync-mac
@@ -69,7 +70,7 @@ class AppState: ObservableObject {
         } else {
             self.showMenubarCallDetails = UserDefaults.standard.bool(forKey: "showMenubarCallDetails") && (!licenseCheck || isPlusLoaded)
         }
-        self.menubarFontSize = UserDefaults.standard.object(forKey: "menubarFontSize") == nil ? 12.0 : UserDefaults.standard.double(forKey: "menubarFontSize")
+        self.menubarFontSize = UserDefaults.standard.object(forKey: "menubarFontSize") == nil ? 13.0 : UserDefaults.standard.double(forKey: "menubarFontSize")
         self.enableMarquee = UserDefaults.standard.bool(forKey: "enableMarquee")
         self.menubarUnreadBadgeStyle = UserDefaults.standard.string(forKey: "menubarUnreadBadgeStyle") ?? "badge"
         self.menubarUnreadBadgeColor = UserDefaults.standard.string(forKey: "menubarUnreadBadgeColor") ?? "accent"

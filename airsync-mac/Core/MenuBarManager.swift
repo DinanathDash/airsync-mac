@@ -339,10 +339,10 @@ struct MenubarStatusView: View {
                 if appState.showMenubarText {
                     if let dragLabel = appState.temporaryDragLabel {
                         if appState.enableMarquee {
-                            MarqueeText(text: dragLabel, fontSize: appState.menubarFontSize, fontWeight: .medium, containerWidth: CGFloat(appState.menubarTextMaxLength))
+                            MarqueeText(text: dragLabel, fontSize: appState.menubarFontSize, fontWeight: .regular, containerWidth: CGFloat(appState.menubarTextMaxLength))
                         } else {
                             Text(dragLabel)
-                                .font(.system(size: appState.menubarFontSize, weight: .medium))
+                                .font(.system(size: appState.menubarFontSize, weight: .regular))
                                 .lineLimit(1)
                                 .frame(maxWidth: CGFloat(appState.menubarTextMaxLength), alignment: .leading)
                         }
@@ -377,7 +377,7 @@ struct MenubarStatusView: View {
                                         }
                                         
                                         Text(callEvent.contactName)
-                                            .font(.system(size: appState.menubarFontSize, weight: .medium))
+                                            .font(.system(size: appState.menubarFontSize, weight: .regular))
                                             .lineLimit(1)
                                         
                                         Text("•")
@@ -421,10 +421,10 @@ struct MenubarStatusView: View {
                                 } else if appState.showMenubarDeviceName && hasDeviceName {
                                     let deviceName = appState.device?.name ?? (bleManager.isAuthenticated ? bleManager.connectedDeviceName : nil) ?? ""
                                     if appState.enableMarquee {
-                                        MarqueeText(text: deviceName, fontSize: appState.menubarFontSize, fontWeight: .medium, containerWidth: CGFloat(appState.menubarTextMaxLength))
+                                        MarqueeText(text: deviceName, fontSize: appState.menubarFontSize, fontWeight: .regular, containerWidth: CGFloat(appState.menubarTextMaxLength))
                                     } else {
                                         Text(deviceName)
-                                            .font(.system(size: appState.menubarFontSize, weight: .medium))
+                                            .font(.system(size: appState.menubarFontSize, weight: .regular))
                                             .lineLimit(1)
                                             .frame(maxWidth: CGFloat(appState.menubarTextMaxLength), alignment: .leading)
                                     }
