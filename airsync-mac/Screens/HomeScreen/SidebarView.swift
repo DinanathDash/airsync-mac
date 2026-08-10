@@ -9,21 +9,31 @@ import SwiftUI
 
 struct SidebarView: View {
     @ObservedObject var appState = AppState.shared
+    @ObservedObject var discoveryManager = DiscoveryManager.shared
     @State private var isExpandedAllSeas: Bool = false
     @State private var showingPlusDesktopPopover = false
 
     var body: some View {
         VStack {
-            HStack(alignment: .center) {
+            HStack(alignment: .center, spacing: 8) {
                 let name = appState.device?.name ?? "AirSync"
-                let truncated = name.count > 20
-                ? String(name.prefix(20)) + "..."
+                let truncated = name.count > 16
+                ? String(name.prefix(16)) + "..."
                 : name
 
                 Text(truncated)
                     .font(.title3)
+
+                if let wifiDevice = discoveryManager.availableWifiDeviceForCurrentBLE {
+                    GlassButtonView(
+                        label: "Switch",
+                        systemImage: "wifi",
+                        action: {
+                            QuickConnectManager.shared.connect(to: wifiDevice)
+                        }
+                    )
+                }
             }
-            .padding(.bottom, 6)
 
             if let deviceVersion = appState.device?.version,
                appState.device?.ipAddress != "BLE",
@@ -45,28 +55,7 @@ struct SidebarView: View {
 
             if appState.adbConnected {
                 HStack(spacing: 12) {
-                    GlassButtonView(
-                        label: appState.isSidebarMirroring ? "Close" : "Mirror",
-                        systemImage: appState.isSidebarMirroring ? "xmark.circle" : "apps.iphone",
-                        action: {
-                            if appState.isSidebarMirroring {
-                                appState.isSidebarMirroring = false
-                            } else {
-                                if appState.useNativeMirroringByDefault {
-                                    appState.isNativeMirroring = true
-                                } else {
-                                    ADBConnector.startScrcpy(
-                                        ip: appState.device?.ipAddress ?? "",
-                                        port: appState.adbPort,
-                                        deviceName: appState.device?.name ?? "My Phone"
-                                    )
-                                }
-                            }
-                        }
-                    )
-                    .transition(.identity)
-                    .keyboardShortcut("p", modifiers: [.command])
-                    .contextMenu {
+                    Menu {
                         // 1. Default mirror action
                         if appState.useNativeMirroringByDefault {
                             Button("Android Mirror") {
@@ -101,62 +90,92 @@ struct SidebarView: View {
                             .keyboardShortcut("p", modifiers: [.command, .shift])
                         }
 
-                        Button("Desktop Mode") {
-                            ADBConnector.startScrcpy(
-                                ip: appState.device?.ipAddress ?? "",
-                                port: appState.adbPort,
-                                deviceName: appState.device?.name ?? "My Phone",
-                                desktop: true
-                            )
-                        }
-                        .keyboardShortcut("d", modifiers: [.command])
-                        
                         Button(appState.isSidebarMirroring ? "Stop Mirroring Here" : "Mirror Here") {
                             appState.isSidebarMirroring.toggle()
                         }
                         .keyboardShortcut("s", modifiers: [.command, .shift])
+                    } label: {
+                        if appState.isSidebarMirroring {
+                            Label("Close", systemImage: "xmark.circle")
+                        } else {
+                            Label("Mirror", systemImage: "apps.iphone")
+                        }
+                    } primaryAction: {
+                        if appState.isSidebarMirroring {
+                            appState.isSidebarMirroring = false
+                        } else {
+                            if appState.useNativeMirroringByDefault {
+                                appState.isNativeMirroring = true
+                            } else {
+                                ADBConnector.startScrcpy(
+                                    ip: appState.device?.ipAddress ?? "",
+                                    port: appState.adbPort,
+                                    deviceName: appState.device?.name ?? "My Phone"
+                                )
+                            }
+                        }
                     }
+                    .menuStyle(.button)
+                    .controlSize(.large)
+                    .glassButtonIfAvailable()
+                    .transition(.identity)
+                    .keyboardShortcut("p", modifiers: [.command])
 
-                    GlassButtonView(
-                        label: "Desktop",
-                        systemImage: "desktopcomputer",
-                        action: {
-                            if appState.isPlus && appState.licenseCheck {
-                                if appState.useNativeDesktopMirroringByDefault {
+                    Menu {
+                        if appState.useNativeDesktopMirroringByDefault {
+                            Button("Native Desktop") {
+                                if appState.isPlus && appState.licenseCheck {
                                     appState.isNativeDesktopMirroring = true
                                 } else {
+                                    showingPlusDesktopPopover = true
+                                }
+                            }
+                            .keyboardShortcut("d", modifiers: [.command])
+                            
+                            Button("scrcpy Desktop") {
+                                if appState.isPlus && appState.licenseCheck {
                                     ADBConnector.startScrcpy(
                                         ip: appState.device?.ipAddress ?? "",
                                         port: appState.adbPort,
                                         deviceName: appState.device?.name ?? "My Phone",
                                         desktop: true
                                     )
+                                } else {
+                                    showingPlusDesktopPopover = true
                                 }
-                            } else {
-                                showingPlusDesktopPopover = true
-                            }
-                        }
-                    )
-                    .transition(.identity)
-                    .keyboardShortcut("d", modifiers: [.command])
-                    .contextMenu {
-                        if appState.useNativeDesktopMirroringByDefault {
-                            Button("Native Desktop") {
-                                appState.isNativeDesktopMirroring = true
-                            }
-                            .keyboardShortcut("d", modifiers: [.command])
-                            
-                            Button("scrcpy Desktop") {
-                                ADBConnector.startScrcpy(
-                                    ip: appState.device?.ipAddress ?? "",
-                                    port: appState.adbPort,
-                                    deviceName: appState.device?.name ?? "My Phone",
-                                    desktop: true
-                                )
                             }
                             .keyboardShortcut("d", modifiers: [.command, .shift])
                         } else {
                             Button("scrcpy Desktop") {
+                                if appState.isPlus && appState.licenseCheck {
+                                    ADBConnector.startScrcpy(
+                                        ip: appState.device?.ipAddress ?? "",
+                                        port: appState.adbPort,
+                                        deviceName: appState.device?.name ?? "My Phone",
+                                        desktop: true
+                                    )
+                                } else {
+                                    showingPlusDesktopPopover = true
+                                }
+                            }
+                            .keyboardShortcut("d", modifiers: [.command])
+                            
+                            Button("Native Desktop") {
+                                if appState.isPlus && appState.licenseCheck {
+                                    appState.isNativeDesktopMirroring = true
+                                } else {
+                                    showingPlusDesktopPopover = true
+                                }
+                            }
+                            .keyboardShortcut("d", modifiers: [.command, .shift])
+                        }
+                    } label: {
+                        Label("Desktop", systemImage: "desktopcomputer")
+                    } primaryAction: {
+                        if appState.isPlus && appState.licenseCheck {
+                            if appState.useNativeDesktopMirroringByDefault {
+                                appState.isNativeDesktopMirroring = true
+                            } else {
                                 ADBConnector.startScrcpy(
                                     ip: appState.device?.ipAddress ?? "",
                                     port: appState.adbPort,
@@ -164,14 +183,15 @@ struct SidebarView: View {
                                     desktop: true
                                 )
                             }
-                            .keyboardShortcut("d", modifiers: [.command])
-                            
-                            Button("Native Desktop") {
-                                appState.isNativeDesktopMirroring = true
-                            }
-                            .keyboardShortcut("d", modifiers: [.command, .shift])
+                        } else {
+                            showingPlusDesktopPopover = true
                         }
                     }
+                    .menuStyle(.button)
+                    .controlSize(.large)
+                    .glassButtonIfAvailable()
+                    .transition(.identity)
+                    .keyboardShortcut("d", modifiers: [.command])
                     .popover(isPresented: $showingPlusDesktopPopover, arrowEdge: .top) {
                         PlusFeaturePopover(message: "Desktop Mode is an AirSync+ feature")
                     }

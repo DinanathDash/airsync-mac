@@ -23,6 +23,7 @@ class AppState: ObservableObject {
 
     private var clipboardCancellable: AnyCancellable?
     private var lastClipboardValue: String? = nil
+    private var lastClipboardChangeCount: Int = -1
     private var shouldSkipSave = false
     private var cancellables = Set<AnyCancellable>()
     private var bleWakeUpWorkItem: DispatchWorkItem?
@@ -47,6 +48,9 @@ class AppState: ObservableObject {
         
         let savedFallbackToMdns = UserDefaults.standard.object(forKey: "fallbackToMdns")
         self.fallbackToMdns = savedFallbackToMdns == nil ? true : UserDefaults.standard.bool(forKey: "fallbackToMdns")
+
+        let savedShowInMenubar = UserDefaults.standard.object(forKey: "showInMenubar")
+        self.showInMenubar = savedShowInMenubar == nil ? true : UserDefaults.standard.bool(forKey: "showInMenubar")
 
         self.showMenubarText = UserDefaults.standard.bool(forKey: "showMenubarText")
         self.showMenubarDeviceName = UserDefaults.standard.object(forKey: "showMenubarDeviceName") == nil ? true : UserDefaults.standard.bool(forKey: "showMenubarDeviceName")
@@ -119,6 +123,8 @@ class AppState: ObservableObject {
         self.showAIToolbarButton = UserDefaults.standard.object(forKey: "showAIToolbarButton") == nil ? true : UserDefaults.standard.bool(forKey: "showAIToolbarButton")
         self.includeSilentInAIOption = UserDefaults.standard.bool(forKey: "includeSilentInAIOption")
         self.enableMenubarAISummary = UserDefaults.standard.bool(forKey: "enableMenubarAISummary")
+        self.autoMenubarSummary = UserDefaults.standard.bool(forKey: "autoMenubarSummary")
+        self.alwaysKillAdbBeforeConnect = UserDefaults.standard.bool(forKey: "alwaysKillAdbBeforeConnect")
 
         let savedCrashReportingMode = UserDefaults.standard.string(forKey: "crashReportingMode") ?? CrashReportingMode.manual.rawValue
         self.crashReportingMode = CrashReportingMode(rawValue: savedCrashReportingMode) ?? .manual
@@ -146,6 +152,7 @@ class AppState: ObservableObject {
 
         self.isBLEEnabled = UserDefaults.standard.bool(forKey: "isBLEEnabled")
         self.isBLEAutoConnectEnabled = UserDefaults.standard.object(forKey: "isBLEAutoConnectEnabled") == nil ? true : UserDefaults.standard.bool(forKey: "isBLEAutoConnectEnabled")
+        self.isAutoSwitchWithBLEEnabled = UserDefaults.standard.object(forKey: "isAutoSwitchWithBLEEnabled") == nil ? true : UserDefaults.standard.bool(forKey: "isAutoSwitchWithBLEEnabled")
 
         if isBLEEnabled {
             BLECentralManager.shared.startScanning()
@@ -207,7 +214,7 @@ class AppState: ObservableObject {
                 loadRecentApps()
 
                 // Mount WebDAV volume
-                if newDevice.ipAddress != "BLE" && isPlus && isFileAccessEnabled {
+                if newDevice.isRegularConnection && isPlus && isFileAccessEnabled {
                     WebDAVManager.shared.mount(ipAddress: newDevice.ipAddress, port: 9081, volumeName: newDevice.name)
                 }
             } else {
@@ -223,16 +230,23 @@ class AppState: ObservableObject {
                 self.selectedTab = .notifications
             }
 
+            if let d = device, !d.isBLE, !d.name.isEmpty {
+                UserDefaults.standard.set(d.name, forKey: "lastRegularDeviceName")
+            }
+
             // BLE connection management: Wi-Fi priority over BLE
-            let isRegularConnection = device?.ipAddress != nil && device?.ipAddress != "BLE"
-            let wasRegularConnection = oldValue?.ipAddress != nil && oldValue?.ipAddress != "BLE"
+            let isRegularConnection = device?.isRegularConnection ?? false
+            let wasRegularConnection = oldValue?.isRegularConnection ?? false
 
             if isRegularConnection {
-                // Regular connection established — immediately put BLE to idle (disconnect & stop scan)
+                // Regular connection established — immediately put BLE to idle (stop scan) and reset manual disconnect flag
                 if isBLEEnabled {
-                    print("[state] Regular connection active — disconnecting BLE and putting to idle")
+                    print("[state] Regular connection active — stopping BLE scan")
                     BLECentralManager.shared.stopScanning()
-                    BLECentralManager.shared.disconnect()
+                    if BLECentralManager.shared.isConnected {
+                        BLECentralManager.shared.disconnect()
+                    }
+                    BLECentralManager.shared.isManuallyDisconnected = false
                 }
                 // Cancel any pending delayed BLE wake-up tasks
                 self.bleWakeUpWorkItem?.cancel()
@@ -242,9 +256,9 @@ class AppState: ObservableObject {
                 self.bleWakeUpWorkItem?.cancel()
                 let workItem = DispatchWorkItem { [weak self] in
                     guard let self = self else { return }
-                    let stillDisconnected = self.device?.ipAddress == nil || self.device?.ipAddress == "BLE"
-                    if stillDisconnected && self.isBLEEnabled && !BLECentralManager.shared.isAuthenticated {
-                        print("[state] Regular connection stayed lost for 5s — resuming BLE scan")
+                    let stillDisconnected = self.device == nil || self.device?.isBLE == true
+                    if stillDisconnected && self.isBLEEnabled && self.isBLEAutoConnectEnabled && !BLECentralManager.shared.isAuthenticated {
+                        print("[state] Regular connection stayed lost for 5s — resuming BLE scan to auto-connect nearby")
                         BLECentralManager.shared.isManuallyDisconnected = false
                         BLECentralManager.shared.startScanning()
                     }
@@ -259,12 +273,15 @@ class AppState: ObservableObject {
     @Published var callEvents: [CallEvent] = []
     private var callDurationTimer: AnyCancellable?
     @Published var activeCallDurationSec: Int = 0
+    @Published var lastCallProgressReceived: Date? = nil
 
     @Published var activeCall: CallEvent? = nil {
         didSet {
             if activeCall != nil {
+                lastCallProgressReceived = Date()
                 startCallTimer()
             } else {
+                lastCallProgressReceived = nil
                 stopCallTimer()
             }
         }
@@ -286,6 +303,22 @@ class AppState: ObservableObject {
                     return
                 }
                 self.activeCallDurationSec = max(0, Int(Date().timeIntervalSince1970 - Double(call.timestamp) / 1000.0))
+                
+                if let lastProgress = self.lastCallProgressReceived {
+                    let timeSinceProgress = Date().timeIntervalSince(lastProgress)
+                    if timeSinceProgress > 12.0 {
+                        print("[state] No call progress received for 12 seconds. Auto-dismissing call.")
+                        self.activeCall = nil
+                        let allEventIds = self.callEvents.map { $0.eventId }
+                        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: allEventIds)
+                        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: allEventIds)
+                        self.stopCallRingtone()
+                        
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                            self.callEvents.removeAll()
+                        }
+                    }
+                }
             }
     }
     
@@ -337,6 +370,7 @@ class AppState: ObservableObject {
     }
     @Published var adbConnecting: Bool = false
     @Published var manualAdbConnectionPending: Bool = false
+    @Published var userInitiatedAdbConnect: Bool = false
     @Published var currentDeviceWallpaperBase64: String? = nil
     @Published var isMenubarWindowOpen: Bool = false
     @Published var adbConnectionMode: ADBConnectionMode? = nil
@@ -376,9 +410,9 @@ class AppState: ObservableObject {
     private var mediaTickTimer: AnyCancellable?
     
     var isConnectedOverLocalNetwork: Bool {
-        guard let ip = device?.ipAddress, ip != "BLE" else { return false }
+        guard let device = device, device.isRegularConnection else { return false }
         // Tailscale IPs usually start with 100.
-        return !ip.hasPrefix("100.")
+        return !device.ipAddress.hasPrefix("100.")
     }
 
     // Audio player for ringtone
@@ -512,10 +546,12 @@ class AppState: ObservableObject {
     var recentNotifyingPackages: [String] {
         var packages: [String] = []
         for notif in notifications {
-            if !packages.contains(notif.package) {
-                packages.append(notif.package)
-                if packages.count == 3 {
-                    break
+            if notif.priority != "silent" {
+                if !packages.contains(notif.package) {
+                    packages.append(notif.package)
+                    if packages.count == 3 {
+                        break
+                    }
                 }
             }
         }
@@ -589,9 +625,18 @@ class AppState: ObservableObject {
         }
     }
 
+    @Published var showInMenubar: Bool {
+        didSet {
+            UserDefaults.standard.set(showInMenubar, forKey: "showInMenubar")
+        }
+    }
+
     @Published var hideDockIcon: Bool {
         didSet {
             UserDefaults.standard.set(hideDockIcon, forKey: "hideDockIcon")
+            if hideDockIcon {
+                showInMenubar = true
+            }
             updateDockIconVisibility()
         }
     }
@@ -622,6 +667,13 @@ class AppState: ObservableObject {
             if isBLEAutoConnectEnabled {
                 BLECentralManager.shared.isManuallyDisconnected = false
             }
+        }
+    }
+
+    @Published var isAutoSwitchWithBLEEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(isAutoSwitchWithBLEEnabled, forKey: "isAutoSwitchWithBLEEnabled")
+            DiscoveryManager.shared.updateAvailableWifiDevice()
         }
     }
 
@@ -749,7 +801,7 @@ class AppState: ObservableObject {
             } else {
                 UserDefaults.standard.set(isFileAccessEnabled, forKey: "isFileAccessEnabled")
                 if isFileAccessEnabled {
-                    if let newDevice = device, newDevice.ipAddress != "BLE" {
+                    if let newDevice = device, newDevice.isRegularConnection {
                         WebDAVManager.shared.mount(ipAddress: newDevice.ipAddress, port: 9081, volumeName: newDevice.name)
                     }
                 } else {
@@ -782,10 +834,22 @@ class AppState: ObservableObject {
             UserDefaults.standard.set(enableMenubarAISummary, forKey: "enableMenubarAISummary")
         }
     }
+    
+    @Published var autoMenubarSummary: Bool {
+        didSet {
+            UserDefaults.standard.set(autoMenubarSummary, forKey: "autoMenubarSummary")
+        }
+    }
 
     @Published var crashReportingMode: CrashReportingMode {
         didSet {
             UserDefaults.standard.set(crashReportingMode.rawValue, forKey: "crashReportingMode")
+        }
+    }
+
+    @Published var alwaysKillAdbBeforeConnect: Bool {
+        didSet {
+            UserDefaults.standard.set(alwaysKillAdbBeforeConnect, forKey: "alwaysKillAdbBeforeConnect")
         }
     }
 
@@ -801,6 +865,7 @@ class AppState: ObservableObject {
 
     // File browser state
     @Published var showFileBrowser: Bool = false
+    @Published var showADBPairingSheet: Bool = false
     @Published var browsePath: String = "/sdcard/"
     @Published var browseItems: [FileBrowserItem] = []
     @Published var isBrowsingLoading: Bool = false
@@ -922,6 +987,11 @@ class AppState: ObservableObject {
             ringtonePlayer = nil
             print("[state] Stopped call ringtone")
         }
+    }
+
+    func receivedCallProgress(eventId: String) {
+        guard let call = activeCall, call.eventId == eventId else { return }
+        lastCallProgressReceived = Date()
     }
 
     func updateCallEvent(_ callEvent: CallEvent) {
@@ -1367,12 +1437,17 @@ class AppState: ObservableObject {
 
     private func startClipboardMonitoring() {
         guard isClipboardSyncEnabled else { return }
+        lastClipboardChangeCount = NSPasteboard.general.changeCount
         clipboardCancellable = Timer
-            .publish(every: 1.0, on: .main, in: .default)
+            .publish(every: 2.5, on: .main, in: .default)
             .autoconnect()
             .sink { [weak self] _ in
                 guard let self = self, self.device != nil else { return }
                 let pasteboard = NSPasteboard.general
+                let currentChangeCount = pasteboard.changeCount
+                guard currentChangeCount != self.lastClipboardChangeCount else { return }
+                self.lastClipboardChangeCount = currentChangeCount
+
                 if let copiedString = pasteboard.string(forType: .string),
                    copiedString != self.lastClipboardValue {
                     self.lastClipboardValue = copiedString
@@ -1402,6 +1477,7 @@ class AppState: ObservableObject {
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
         self.lastClipboardValue = text
+        self.lastClipboardChangeCount = pasteboard.changeCount
 
         // Only handle URLs specially if the whole text is a valid http/https URL.
         if let url = exactURL(from: text) {
@@ -1708,10 +1784,10 @@ class AppState: ObservableObject {
                 self.notifications = []
             }
             // Resume scanning after BLE disconnect (unless a regular connection is already active)
-            let hasRegularConnection = self.device?.ipAddress != nil && self.device?.ipAddress != "BLE"
+            let hasRegularConnection = self.device?.isRegularConnection ?? false
             if isBLEEnabled && !hasRegularConnection && !BLECentralManager.shared.isManuallyDisconnected {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                    if self.isBLEEnabled && self.device?.ipAddress != "BLE" && !BLECentralManager.shared.isAuthenticated {
+                    if self.isBLEEnabled && !(self.device?.isRegularConnection ?? false) && !BLECentralManager.shared.isAuthenticated {
                         BLECentralManager.shared.startScanning()
                     }
                 }
@@ -1719,8 +1795,23 @@ class AppState: ObservableObject {
         }
     }
 
+    static func getPreferredDeviceName(fallback: String?) -> String {
+        if let savedName = UserDefaults.standard.string(forKey: "lastRegularDeviceName"), !savedName.isEmpty {
+            return savedName
+        }
+        if let wifiDevice = QuickConnectManager.shared.lastConnectedDevices.values.first(where: { !$0.isBLE }),
+           !wifiDevice.name.isEmpty {
+            return wifiDevice.name
+        }
+        if let fallback = fallback, !fallback.isEmpty {
+            return fallback
+        }
+        return "Android Device"
+    }
+
     private func updateVirtualDeviceForBLE() {
-        let name = BLECentralManager.shared.connectedDeviceName ?? "Android Device"
+        let rawName = BLECentralManager.shared.connectedDeviceName
+        let name = AppState.getPreferredDeviceName(fallback: rawName)
         self.device = Device(
             name: name,
             ipAddress: "BLE",
@@ -1729,6 +1820,28 @@ class AppState: ObservableObject {
             adbPorts: [],
             deviceId: BLECentralManager.shared.connectingDeviceUUID ?? "ble_device"
         )
+        
+        // Reuse cached wallpaper for BLE connection
+        if self.currentDeviceWallpaperBase64 == nil {
+            if let cachedBase64 = UserDefaults.standard.string(forKey: "lastCachedWallpaperBase64"), !cachedBase64.isEmpty {
+                self.currentDeviceWallpaperBase64 = cachedBase64
+                print("[state] (BLE) Loaded last cached wallpaper from UserDefaults for BLE connection")
+            } else {
+                let fileManager = FileManager.default
+                if let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+                    let wallpaperDir = appSupport.appendingPathComponent("Wallpapers")
+                    let devId = BLECentralManager.shared.connectingDeviceUUID ?? ""
+                    let fileURL = wallpaperDir.appendingPathComponent("\(devId).jpg")
+                    let fallbackURL = wallpaperDir.appendingPathComponent("last_wallpaper.jpg")
+                    let targetURL = fileManager.fileExists(atPath: fileURL.path) ? fileURL : (fileManager.fileExists(atPath: fallbackURL.path) ? fallbackURL : nil)
+                    if let targetURL = targetURL, let data = try? Data(contentsOf: targetURL) {
+                        self.currentDeviceWallpaperBase64 = data.base64EncodedString()
+                        print("[state] (BLE) Loaded last cached wallpaper from disk for BLE connection")
+                    }
+                }
+            }
+        }
+        
         print("[state] (BLE) Created virtual device: \(name)")
     }
 

@@ -17,10 +17,14 @@ struct WiredADBDevice: Hashable, Identifiable {
 struct ADBConnector {
 
     // Potential fallback paths
-    static let possibleADBPaths = [
-        "/opt/homebrew/bin/adb",  // Apple Silicon Homebrew
-        "/usr/local/bin/adb"      // Intel Homebrew
-    ]
+    static let possibleADBPaths: [String] = {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return [
+            "\(home)/Library/Android/sdk/platform-tools/adb",
+            "/opt/homebrew/bin/adb",
+            "/usr/local/bin/adb"
+        ]
+    }()
     static let possibleScrcpyPaths = [
         "/opt/scrcpy/scrcpy",
         "/opt/homebrew/bin/scrcpy",
@@ -108,10 +112,10 @@ struct ADBConnector {
                 
                 var devices: [WiredADBDevice] = []
                 for line in lines {
-                    if line.contains("device") && line.contains("usb:") {
-                        let parts = line.split(separator: " ").filter { !$0.isEmpty }
-                        if !parts.isEmpty {
-                            let serial = String(parts[0])
+                    let parts = line.split(separator: " ").filter { !$0.isEmpty }
+                    if parts.count >= 2 && parts[1] == "device" {
+                        let serial = String(parts[0])
+                        if !serial.contains(":") {
                             var model = "Unknown Device"
                             for part in parts {
                                 if part.hasPrefix("model:") {
@@ -148,7 +152,7 @@ struct ADBConnector {
         connectionLock.unlock()
     }
 
-    static func connectToADB(ip: String) {
+    static func connectToADB(ip: String, killServer: Bool = false) {
         connectionLock.lock()
         if isConnecting {
             connectionLock.unlock()
@@ -172,6 +176,16 @@ struct ADBConnector {
                     }
                     clearConnectionFlag()
                     return
+                }
+
+                if killServer {
+                    logBinaryDetection("Manual connection requested. Killing ADB server first...")
+                    let process = Process()
+                    process.executableURL = URL(fileURLWithPath: adbPath)
+                    process.arguments = ["kill-server"]
+                    try? process.run()
+                    process.waitUntilExit()
+                    logBinaryDetection("ADB server killed.")
                 }
 
                 if devicePorts.isEmpty {
@@ -270,13 +284,16 @@ struct ADBConnector {
                 if !AppState.shared.suppressAdbFailureAlerts {
                     let alert = NSAlert()
                     alert.alertStyle = .warning
-                    alert.addButton(withTitle: "Don't warn me again")
                     alert.addButton(withTitle: "OK")
+                    alert.addButton(withTitle: "Pair with ADB QR")
+                    alert.addButton(withTitle: "Don't warn me again")
                     alert.messageText = "Failed to connect to ADB."
-                    alert.informativeText = "Suggestions:\n• Ensure your Android device is in Wireless debugging mode\n• Try toggling Wireless Debugging off and on again\n• Reconnect to the same Wi-Fi as your Mac"
+                    alert.informativeText = "Suggestions:\n• Pair your device using either the \"Pair with ADB QR\" button or via the command line (adb pair)\n• Ensure your Android device has Wireless Debugging enabled\n• Reconnect to the exact same Wi-Fi network as your Mac"
                     
                     presentAlertAsynchronously(alert) { response in
-                        if response == .alertFirstButtonReturn {
+                        if response == .alertSecondButtonReturn {
+                            AppState.shared.showADBPairingSheet = true
+                        } else if response == .alertThirdButtonReturn {
                             AppState.shared.suppressAdbFailureAlerts = true
                         }
                     }
@@ -428,10 +445,8 @@ struct ADBConnector {
                 let serialToUse: String?
                 if let mapped = mappedSerial, devices.contains(where: { $0.serial == mapped }) {
                     serialToUse = mapped
-                } else if mappedSerial == nil {
-                    serialToUse = devices.first?.serial
                 } else {
-                    serialToUse = nil
+                    serialToUse = devices.first?.serial
                 }
                 
                 DispatchQueue.global(qos: .userInitiated).async {
@@ -492,7 +507,15 @@ struct ADBConnector {
                         DispatchQueue.main.async {
                             AppState.shared.adbConnectionResult = "scrcpy exited:\n" + output
                             if process.terminationStatus != 0 {
-                                presentScrcpyAlert(title: "Mirroring Ended With Errors", informative: "See ADB Console for details.")
+                                let lower = output.lowercased()
+                                if lower.contains("unauthorized") || lower.contains("auth") || lower.contains("pair") {
+                                    presentScrcpyPairingAlert(
+                                        title: "Device Not Paired",
+                                        informative: "Your Android device is not paired or authorized with this Mac. Please pair the device first using either the ADB QR Code or the command line (adb pair)."
+                                    )
+                                } else {
+                                    presentScrcpyAlert(title: "Mirroring Ended With Errors", informative: "See ADB Console for details.")
+                                }
                             }
                         }
                     }
@@ -530,10 +553,8 @@ struct ADBConnector {
                         let serialToUse: String?
                         if let mapped = mappedSerial, devices.contains(where: { $0.serial == mapped }) {
                             serialToUse = mapped
-                        } else if mappedSerial == nil {
-                            serialToUse = devices.first?.serial
                         } else {
-                            serialToUse = nil
+                            serialToUse = devices.first?.serial
                         }
                         
                         DispatchQueue.global(qos: .userInitiated).async {
@@ -581,10 +602,8 @@ struct ADBConnector {
                 let serialToUse: String?
                 if let mapped = mappedSerial, devices.contains(where: { $0.serial == mapped }) {
                     serialToUse = mapped
-                } else if mappedSerial == nil {
-                    serialToUse = devices.first?.serial
                 } else {
-                    serialToUse = nil
+                    serialToUse = devices.first?.serial
                 }
                 
                 DispatchQueue.global(qos: .userInitiated).async {
@@ -638,5 +657,20 @@ private extension ADBConnector {
         alert.informativeText = informative + "\n\nCheck the ADB Console in Settings for detailed logs."
         alert.addButton(withTitle: "OK")
         presentAlertAsynchronously(alert)
+    }
+
+    static func presentScrcpyPairingAlert(title: String, informative: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = title
+        alert.informativeText = informative + "\n\nCheck the ADB Console in Settings for detailed logs."
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Pair with ADB QR")
+        
+        presentAlertAsynchronously(alert) { response in
+            if response == .alertSecondButtonReturn {
+                AppState.shared.showADBPairingSheet = true
+            }
+        }
     }
 }

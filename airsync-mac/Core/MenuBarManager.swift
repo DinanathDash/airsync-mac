@@ -82,6 +82,7 @@ class MenuBarManager: NSObject {
             appState.$device.map { _ in () }.eraseToAnyPublisher(),
             appState.$notifications.map { _ in () }.eraseToAnyPublisher(),
             appState.$status.map { _ in () }.eraseToAnyPublisher(),
+            appState.$showInMenubar.map { _ in () }.eraseToAnyPublisher(),
             appState.$showMenubarText.map { _ in () }.eraseToAnyPublisher(),
             appState.$showingQuickShareTransfer.map { _ in () }.eraseToAnyPublisher(),
             appState.$showMenubarIcon.map { _ in () }.eraseToAnyPublisher(),
@@ -123,13 +124,17 @@ class MenuBarManager: NSObject {
     }
     
     func updateStatusItem() {
-        guard let button = statusItem?.button, let hostingView = hostingView else { return }
+        guard let statusItem = statusItem else { return }
+        
+        let isVisible = appState.showInMenubar
+        statusItem.isVisible = isVisible
+        guard isVisible, let button = statusItem.button, let hostingView = hostingView else { return }
         
         button.image = nil
         button.title = ""
         
         let fittingSize = hostingView.fittingSize
-        statusItem?.length = max(22, fittingSize.width)
+        statusItem.length = max(22, fittingSize.width)
     }
     
     func showDragLabel(_ label: String) {
@@ -480,7 +485,7 @@ struct MenubarStatusView: View {
                 
                 // 3. Unread Badge Count
                 if appState.menubarNotificationStyle == "both" || appState.menubarNotificationStyle == "count" {
-                    let unreadCount = appState.notifications.count
+                    let unreadCount = appState.notifications.filter { $0.priority != "silent" }.count
                     if unreadCount > 0 {
                         if appState.menubarUnreadBadgeStyle == "badge" {
                             Text("\(unreadCount)")
